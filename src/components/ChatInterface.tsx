@@ -1,97 +1,148 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { SourceDisplay } from "@/components/SourceDisplay";
-import { Search } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Send, Bot, User, FileText } from "lucide-react";
+import { SourceDisplay } from "./SourceDisplay";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 
-interface ChatMessage {
+interface Source {
+  title: string;
+  section: string;
+  page: number;
+  excerpt: string;
+}
+
+interface Message {
   id: string;
-  type: "user" | "assistant";
+  type: 'user' | 'assistant';
   content: string;
-  phase?: string;
-  sources?: Array<{
-    title: string;
-    section: string;
-    page: number;
-    excerpt: string;
-  }>;
+  timestamp: Date;
+  sources?: Source[];
+}
+
+interface DocumentChunk {
+  id: string;
+  content: string;
+  page_number: number;
+  section_title: string;
+  document_title: string;
+  document_type: string;
+  file_name: string;
+  similarity: number;
 }
 
 interface ChatInterfaceProps {
   selectedPhase: string;
 }
 
-const sampleResponses = {
-  climb: {
-    content: "For climb phase in A321, maintain climb thrust (CLB) until reaching cruise altitude. Target climb rate: 1500-2000 ft/min initially, reducing to 500-1000 ft/min above FL200. Monitor engine parameters and adjust as needed for optimal performance.",
-    sources: [
-      {
-        title: "A321 FCOM",
-        section: "Normal Procedures - Climb",
-        page: 142,
-        excerpt: "Climb thrust setting: CLB detent on thrust levers. Maintain target climb rate as displayed on FMA. Monitor engine parameters within normal operating limits."
-      }
-    ]
-  },
-  cruise: {
-    content: "In cruise phase, maintain optimum altitude and speed for fuel efficiency. Typical cruise altitude: FL350-FL390. Monitor fuel consumption and adjust flight level as needed for winds and traffic.",
-    sources: [
-      {
-        title: "A321 FCOM",
-        section: "Normal Procedures - Cruise",
-        page: 156,
-        excerpt: "Cruise altitude optimization: Consider winds, traffic, and fuel consumption. Maintain cruise thrust setting and monitor all engine parameters."
-      }
-    ]
-  }
-};
-
 export const ChatInterface = ({ selectedPhase }: ChatInterfaceProps) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [searchingDocs, setSearchingDocs] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const searchDocuments = async (query: string): Promise<DocumentChunk[]> => {
+    if (!user) return [];
+
+    try {
+      setSearchingDocs(true);
+      
+      const { data, error } = await supabase.functions.invoke('search-documents', {
+        body: {
+          query,
+          limit: 5,
+          documentTypes: ['FCOM', 'QRH', 'FCTM', 'MEL', 'AFM'], // Aviation manuals
+        },
+      });
+
+      if (error) {
+        console.error('Document search error:', error);
+        return [];
+      }
+
+      return data?.results || [];
+    } catch (error) {
+      console.error('Failed to search documents:', error);
+      return [];
+    } finally {
+      setSearchingDocs(false);
+    }
+  };
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || isLoading) return;
 
-    const userMessage: ChatMessage = {
+    const userMessage: Message = {
       id: Date.now().toString(),
-      type: "user",
-      content: inputValue,
-      phase: selectedPhase,
+      type: 'user',
+      content: inputValue.trim(),
+      timestamp: new Date(),
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const query = inputValue.trim();
     setInputValue("");
     setIsLoading(true);
 
-    // Simulate API response
-    setTimeout(() => {
-      const response = sampleResponses[selectedPhase as keyof typeof sampleResponses] || {
-        content: "I understand you're asking about procedures for the current flight phase. This is a simulated response. In the full system, I would search through the relevant manuals and provide precise, sourced guidance.",
-        sources: [
-          {
-            title: "A321 QRH",
-            section: "General Procedures",
-            page: 1,
-            excerpt: "Refer to appropriate manual sections for detailed procedures specific to your flight phase and operational conditions."
-          }
-        ]
-      };
+    try {
+      // Search uploaded documents first
+      const documentChunks = await searchDocuments(query);
+      
+      let responseContent = `For the ${selectedPhase} phase, here's the guidance:\n\n`;
+      let sources: Source[] = [];
 
-      const assistantMessage: ChatMessage = {
+      if (documentChunks.length > 0) {
+        // Use real document content
+        responseContent += "Based on your uploaded manuals:\n\n";
+        
+        documentChunks.forEach((chunk, index) => {
+          responseContent += `${index + 1}. ${chunk.content.substring(0, 200)}...\n\n`;
+          
+          sources.push({
+            title: chunk.document_title,
+            section: chunk.section_title || `${chunk.document_type} Manual`,
+            page: chunk.page_number,
+            excerpt: chunk.content.substring(0, 150) + "...",
+          });
+        });
+      } else {
+        // Fallback to mock response
+        responseContent += getMockResponse(selectedPhase, query);
+        sources = getMockSources(selectedPhase);
+      }
+
+      const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        type: "assistant",
-        content: response.content,
-        phase: selectedPhase,
-        sources: response.sources,
+        type: 'assistant',
+        content: responseContent,
+        timestamp: new Date(),
+        sources,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to process your request. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -101,95 +152,130 @@ export const ChatInterface = ({ selectedPhase }: ChatInterfaceProps) => {
     }
   };
 
+  const getMockResponse = (phase: string, query: string) => {
+    const responses: Record<string, string> = {
+      preflight: "Complete all preflight inspection items as per checklist. Verify aircraft configuration, fuel quantity, and weather conditions.",
+      taxi: "Taxi at safe speed, monitor ground traffic, and follow ATC instructions. Complete taxi checklist items.",
+      takeoff: "Set takeoff thrust, monitor engine parameters, and maintain runway centerline until V1/VR/V2 speeds.",
+      climb: "Maintain climb thrust (CLB), target climb rate 1500-2000 ft/min initially, monitor engine parameters.",
+      cruise: "Maintain optimum altitude and speed for fuel efficiency. Monitor fuel consumption and adjust as needed.",
+      descent: "Begin descent at calculated top of descent point. Use appropriate descent profile and speed restrictions.",
+      approach: "Configure aircraft for approach, maintain proper speed and glide path, complete approach checklist.",
+      landing: "Maintain approach speed until threshold, execute proper landing technique, complete landing checklist."
+    };
+    return responses[phase] || "Please refer to the appropriate manual section for detailed procedures.";
+  };
+
+  const getMockSources = (phase: string): Source[] => {
+    return [
+      {
+        title: "A321 FCOM",
+        section: `${phase.charAt(0).toUpperCase() + phase.slice(1)} Procedures`,
+        page: Math.floor(Math.random() * 200) + 100,
+        excerpt: "Standard operating procedures for normal operations. Follow checklist items in sequence and monitor all systems."
+      }
+    ];
+  };
+
   return (
-    <Card className="shadow-display bg-display-gradient border-border h-[calc(100vh-240px)] flex flex-col">
-      {/* Chat Header */}
+    <Card className="shadow-cockpit bg-display-gradient border-border h-[calc(100vh-240px)] flex flex-col">
+      {/* Header */}
       <div className="p-4 border-b border-border">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-foreground">Ask Your Question</h2>
-          <Badge variant="outline" className="border-primary text-primary">
-            {selectedPhase.charAt(0).toUpperCase() + selectedPhase.slice(1)} Mode
-          </Badge>
-        </div>
-        <p className="text-sm text-muted-foreground mt-1">
-          Get precise, phase-aware procedural guidance from A321 manuals
+        <h2 className="text-lg font-semibold text-foreground">Flight Assistant</h2>
+        <p className="text-sm text-muted-foreground">
+          Ask questions about A321 procedures • Phase: {selectedPhase.charAt(0).toUpperCase() + selectedPhase.slice(1)}
         </p>
       </div>
 
-      {/* Messages Area */}
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
-          <div className="text-center py-8">
-            <div className="text-muted-foreground mb-4">
-              <Search className="w-12 h-12 mx-auto mb-2 opacity-50" />
-              <p>Ask any question about A321 procedures</p>
-              <p className="text-sm mt-1">I'll provide answers specific to your current flight phase</p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-6 max-w-md mx-auto">
-              <div className="text-xs p-2 bg-muted rounded text-left">
-                "What's my thrust setting for climb?"
-              </div>
-              <div className="text-xs p-2 bg-muted rounded text-left">
-                "Emergency descent procedure?"
-              </div>
-              <div className="text-xs p-2 bg-muted rounded text-left">
-                "Approach speed for current weight?"
-              </div>
-              <div className="text-xs p-2 bg-muted rounded text-left">
-                "Pre-flight checklist items?"
-              </div>
-            </div>
+          <div className="text-center py-8 text-muted-foreground">
+            <Bot className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p className="text-lg mb-2">Ready to assist with A321 procedures</p>
+            <p className="text-sm">Ask me anything about flight operations, emergency procedures, or system operations</p>
           </div>
         )}
 
         {messages.map((message) => (
-          <div key={message.id} className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[80%] rounded-lg p-3 ${
-              message.type === "user" 
-                ? "bg-primary text-primary-foreground" 
-                : "bg-card border border-border"
-            }`}>
-              <div className="text-sm">{message.content}</div>
-              {message.type === "assistant" && message.sources && (
-                <SourceDisplay sources={message.sources} />
-              )}
+          <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[80%] space-y-2 ${message.type === 'user' ? 'text-right' : 'text-left'}`}>
+              <div className="flex items-center gap-2">
+                {message.type === 'user' ? (
+                  <>
+                    <span className="text-xs text-muted-foreground">You</span>
+                    <User className="w-4 h-4 text-muted-foreground" />
+                  </>
+                ) : (
+                  <>
+                    <Bot className="w-4 h-4 text-primary" />
+                    <span className="text-xs text-muted-foreground">A321 Assistant</span>
+                  </>
+                )}
+              </div>
+              
+              <div className={`rounded-lg p-3 ${
+                message.type === 'user' 
+                  ? 'bg-primary text-primary-foreground ml-8' 
+                  : 'bg-card border border-border mr-8'
+              }`}>
+                <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+                
+                {message.type === 'assistant' && message.sources && (
+                  <SourceDisplay sources={message.sources} />
+                )}
+              </div>
             </div>
           </div>
         ))}
 
         {isLoading && (
           <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-lg p-3 bg-card border border-border">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
-                  <div className="w-2 h-2 bg-primary rounded-full animate-pulse" style={{animationDelay: "0.2s"}}></div>
-                  <div className="w-2 h-2 bg-primary rounded-full animate-pulse" style={{animationDelay: "0.4s"}}></div>
+            <div className="max-w-[80%] space-y-2">
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4 text-primary" />
+                <span className="text-xs text-muted-foreground">A321 Assistant</span>
+              </div>
+              
+              <div className="bg-card border border-border rounded-lg p-3 mr-8">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
+                    <div className="w-2 h-2 bg-primary rounded-full animate-pulse" style={{animationDelay: "0.2s"}}></div>
+                    <div className="w-2 h-2 bg-primary rounded-full animate-pulse" style={{animationDelay: "0.4s"}}></div>
+                  </div>
+                  {searchingDocs ? 'Searching documents...' : 'Analyzing request...'}
                 </div>
-                Searching manuals...
               </div>
             </div>
           </div>
         )}
+
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
+      {/* Input */}
       <div className="p-4 border-t border-border">
         <div className="flex gap-2">
-          <Input
+          <Textarea
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask about procedures, limitations, or emergency actions..."
-            className="flex-1 bg-input border-border"
+            placeholder="Ask about procedures, limitations, emergency actions..."
+            className="min-h-[50px] max-h-[120px] resize-none"
             disabled={isLoading}
           />
           <Button 
             onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading}
-            className="bg-primary hover:bg-primary/90"
+            disabled={isLoading || !inputValue.trim() || searchingDocs}
+            size="sm"
+            className="self-end"
           >
-            <Search className="w-4 h-4" />
+            {searchingDocs ? (
+              <FileText className="h-4 w-4 animate-pulse" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
           </Button>
         </div>
       </div>

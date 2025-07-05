@@ -1,1 +1,7 @@
 project_id = "lilejyjiorezgnjosxma"
+
+[functions.process-pdf]
+verify_jwt = true
+
+[functions.search-documents]
+verify_jwt = true

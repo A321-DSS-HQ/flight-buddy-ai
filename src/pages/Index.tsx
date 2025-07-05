@@ -3,9 +3,11 @@ import { Navigate, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { FlightPhaseSelector } from "@/components/FlightPhaseSelector";
 import { ChatInterface } from "@/components/ChatInterface";
+import { DocumentUpload } from "@/components/DocumentUpload";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { LogOut, MessageSquare, Upload } from "lucide-react";
 
 const Index = () => {
   const { user, loading, signOut } = useAuth();
@@ -60,9 +62,28 @@ const Index = () => {
             />
           </div>
 
-          {/* Chat Interface */}
+          {/* Main Interface */}
           <div className="lg:col-span-3">
-            <ChatInterface selectedPhase={selectedPhase} />
+            <Tabs defaultValue="chat" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="chat" className="flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4" />
+                  Assistant
+                </TabsTrigger>
+                <TabsTrigger value="documents" className="flex items-center gap-2">
+                  <Upload className="h-4 w-4" />
+                  Documents
+                </TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="chat" className="mt-4">
+                <ChatInterface selectedPhase={selectedPhase} />
+              </TabsContent>
+              
+              <TabsContent value="documents" className="mt-4">
+                <DocumentUpload />
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </div>
