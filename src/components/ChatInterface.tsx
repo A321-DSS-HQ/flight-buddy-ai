@@ -7,6 +7,7 @@ import { SourceDisplay } from "./SourceDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { chatInputSchema, sanitizeInput, createRateLimiter } from "@/lib/validation";
 
 interface Source {
   title: string;
@@ -37,6 +38,9 @@ interface DocumentChunk {
 interface ChatInterfaceProps {
   selectedPhase: string;
 }
+
+// Rate limiter: 20 messages per 5 minutes per user
+const chatRateLimiter = createRateLimiter(20, 5 * 60 * 1000);
 
 export const ChatInterface = ({ selectedPhase }: ChatInterfaceProps) => {
   const { user } = useAuth();
@@ -84,17 +88,40 @@ export const ChatInterface = ({ selectedPhase }: ChatInterfaceProps) => {
   };
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isLoading || !user) return;
+
+    // Rate limiting check
+    if (!chatRateLimiter(user.id)) {
+      toast({
+        title: "Rate Limit Exceeded",
+        description: "You're sending messages too quickly. Please wait a moment.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate and sanitize input
+    const sanitizedInput = sanitizeInput(inputValue.trim());
+    const validation = chatInputSchema.safeParse(sanitizedInput);
+    
+    if (!validation.success) {
+      toast({
+        title: "Invalid Input",
+        description: "Please check your message and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
       type: 'user',
-      content: inputValue.trim(),
+      content: sanitizedInput,
       timestamp: new Date(),
     };
 
     setMessages(prev => [...prev, userMessage]);
-    const query = inputValue.trim();
+    const query = sanitizedInput;
     setInputValue("");
     setIsLoading(true);
 

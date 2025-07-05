@@ -7,8 +7,13 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
+import { PasswordStrength } from '@/components/ui/password-strength';
 import { toast } from 'sonner';
-import { Plane, Mail } from 'lucide-react';
+import { Plane, Mail, Shield } from 'lucide-react';
+import { signUpSchema, signInSchema, sanitizeInput, createRateLimiter } from '@/lib/validation';
+
+// Rate limiter: 5 attempts per 15 minutes per IP
+const authRateLimiter = createRateLimiter(5, 15 * 60 * 1000);
 
 const Auth = () => {
   const { user, loading, signUp, signIn, signInWithGoogle, signInWithTwitter, signInWithFacebook } = useAuth();
@@ -16,6 +21,8 @@ const Auth = () => {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [showPasswordStrength, setShowPasswordStrength] = useState(false);
 
   if (loading) {
     return (
@@ -31,35 +38,103 @@ const Auth = () => {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password || !fullName) {
-      toast.error('Please fill in all fields');
+    setValidationErrors({});
+
+    // Rate limiting check
+    const clientId = 'signup-' + (navigator.userAgent + Date.now()).slice(0, 20);
+    if (!authRateLimiter(clientId)) {
+      toast.error('Too many signup attempts. Please wait 15 minutes before trying again.');
+      return;
+    }
+
+    // Sanitize inputs
+    const sanitizedEmail = sanitizeInput(email);
+    const sanitizedFullName = sanitizeInput(fullName);
+    
+    // Validate inputs
+    const validation = signUpSchema.safeParse({
+      email: sanitizedEmail,
+      password,
+      fullName: sanitizedFullName,
+    });
+
+    if (!validation.success) {
+      const errors: Record<string, string> = {};
+      validation.error.errors.forEach((error) => {
+        if (error.path[0]) {
+          errors[error.path[0] as string] = error.message;
+        }
+      });
+      setValidationErrors(errors);
+      toast.error('Please fix the validation errors');
       return;
     }
     
     setIsLoading(true);
-    const { error } = await signUp(email, password, fullName);
-    setIsLoading(false);
-    
-    if (error) {
-      toast.error(error.message);
-    } else {
-      toast.success('Check your email to confirm your account');
+    try {
+      const { error } = await signUp(sanitizedEmail, password, sanitizedFullName);
+      
+      if (error) {
+        // Generic error message for security
+        toast.error('Registration failed. Please check your information and try again.');
+      } else {
+        toast.success('Check your email to confirm your account');
+        // Clear form on success
+        setEmail('');
+        setPassword('');
+        setFullName('');
+      }
+    } catch (error) {
+      toast.error('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      toast.error('Please fill in all fields');
+    setValidationErrors({});
+
+    // Rate limiting check
+    const clientId = 'signin-' + (navigator.userAgent + Date.now()).slice(0, 20);
+    if (!authRateLimiter(clientId)) {
+      toast.error('Too many login attempts. Please wait 15 minutes before trying again.');
+      return;
+    }
+
+    // Sanitize inputs
+    const sanitizedEmail = sanitizeInput(email);
+    
+    // Validate inputs
+    const validation = signInSchema.safeParse({
+      email: sanitizedEmail,
+      password,
+    });
+
+    if (!validation.success) {
+      const errors: Record<string, string> = {};
+      validation.error.errors.forEach((error) => {
+        if (error.path[0]) {
+          errors[error.path[0] as string] = error.message;
+        }
+      });
+      setValidationErrors(errors);
+      toast.error('Please check your login credentials');
       return;
     }
     
     setIsLoading(true);
-    const { error } = await signIn(email, password);
-    setIsLoading(false);
-    
-    if (error) {
-      toast.error(error.message);
+    try {
+      const { error } = await signIn(sanitizedEmail, password);
+      
+      if (error) {
+        // Generic error message for security
+        toast.error('Login failed. Please check your credentials and try again.');
+      }
+    } catch (error) {
+      toast.error('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -116,8 +191,12 @@ const Auth = () => {
                     placeholder="pilot@airline.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    className={validationErrors.email ? 'border-red-500' : ''}
                     required
                   />
+                  {validationErrors.email && (
+                    <p className="text-sm text-red-500">{validationErrors.email}</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="signin-password">Password</Label>
@@ -145,8 +224,12 @@ const Auth = () => {
                     placeholder="Captain John Smith"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
+                    className={validationErrors.fullName ? 'border-red-500' : ''}
                     required
                   />
+                  {validationErrors.fullName && (
+                    <p className="text-sm text-red-500">{validationErrors.fullName}</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="signup-email">Email</Label>
@@ -156,18 +239,37 @@ const Auth = () => {
                     placeholder="pilot@airline.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    className={validationErrors.email ? 'border-red-500' : ''}
                     required
                   />
+                  {validationErrors.email && (
+                    <p className="text-sm text-red-500">{validationErrors.email}</p>
+                  )}
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="signup-password">Password</Label>
+                  <Label htmlFor="signup-password">
+                    <div className="flex items-center gap-2">
+                      Password
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  </Label>
                   <Input
                     id="signup-password"
                     type="password"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setShowPasswordStrength(e.target.value.length > 0);
+                    }}
+                    className={validationErrors.password ? 'border-red-500' : ''}
                     required
                   />
+                  {validationErrors.password && (
+                    <p className="text-sm text-red-500">{validationErrors.password}</p>
+                  )}
+                  {showPasswordStrength && (
+                    <PasswordStrength password={password} className="mt-3" />
+                  )}
                 </div>
                 <Button type="submit" className="w-full" disabled={isLoading}>
                   {isLoading ? 'Creating account...' : 'Create Account'}

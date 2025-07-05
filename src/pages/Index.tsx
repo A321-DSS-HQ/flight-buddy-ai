@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { FlightPhaseSelector } from "@/components/FlightPhaseSelector";
 import { ChatInterface } from "@/components/ChatInterface";
 import { DocumentUpload } from "@/components/DocumentUpload";
+import { SecurityAlert } from "@/components/SecurityAlert";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -51,6 +52,9 @@ const Index = () => {
             </div>
           </div>
         </Card>
+
+        {/* Security Alert */}
+        <SecurityAlert />
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">

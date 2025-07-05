@@ -171,9 +171,10 @@ Description: This is a ${document.document_type || 'aviation'} document that has
       }
     }
 
+    // Return generic error message for security (don't expose internal details)
     return new Response(
       JSON.stringify({ 
-        error: error.message || 'An error occurred processing the PDF',
+        error: 'Document processing failed. Please try again or contact support.',
         success: false 
       }),
       { 
