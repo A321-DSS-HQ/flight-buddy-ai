@@ -1,10 +1,27 @@
 import { useState } from "react";
+import { Navigate, Link } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 import { FlightPhaseSelector } from "@/components/FlightPhaseSelector";
 import { ChatInterface } from "@/components/ChatInterface";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
 
 const Index = () => {
+  const { user, loading, signOut } = useAuth();
   const [selectedPhase, setSelectedPhase] = useState<string>("preflight");
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-cockpit-gradient flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/auth" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-cockpit-gradient p-4 md:p-6">
@@ -17,12 +34,18 @@ const Index = () => {
                 DSS Pilot Assistant
               </h1>
               <p className="text-muted-foreground mt-1">
-                A321 Decision Support System
+                A321 Decision Support System • Welcome, {user.user_metadata?.full_name || user.email}
               </p>
             </div>
-            <div className="text-right">
-              <div className="text-sm text-muted-foreground">Aircraft Type</div>
-              <div className="text-lg font-semibold text-primary">A321</div>
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <div className="text-sm text-muted-foreground">Aircraft Type</div>
+                <div className="text-lg font-semibold text-primary">A321</div>
+              </div>
+              <Button variant="outline" size="sm" onClick={signOut}>
+                <LogOut className="h-4 w-4 mr-2" />
+                Sign Out
+              </Button>
             </div>
           </div>
         </Card>
