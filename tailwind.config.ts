@@ -68,6 +68,17 @@ export default {
 				md: 'calc(var(--radius) - 2px)',
 				sm: 'calc(var(--radius) - 4px)'
 			},
+			backgroundImage: {
+				'cockpit-gradient': 'var(--gradient-cockpit)',
+				'display-gradient': 'var(--gradient-display)',
+			},
+			boxShadow: {
+				'cockpit': 'var(--shadow-cockpit)',
+				'display': 'var(--shadow-display)',
+			},
+			transitionTimingFunction: {
+				'cockpit': 'var(--transition-cockpit)',
+			},
 			keyframes: {
 				'accordion-down': {
 					from: {
