@@ -29,12 +29,16 @@ serve(async (req) => {
 
     const requestBody = await req.json();
     documentId = requestBody.documentId;
+    const extractedText = requestBody.extractedText;
+    const metadata = requestBody.metadata;
     
     if (!documentId) {
       throw new Error('Document ID is required');
     }
 
     console.log(`Processing document: ${documentId}`);
+    console.log('Extracted text length:', extractedText?.length || 0);
+    console.log('PDF metadata:', metadata);
 
     // Initialize Supabase client with service role for admin access
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -58,19 +62,17 @@ serve(async (req) => {
 
     console.log(`Processing document: ${document.title} (${document.file_name})`);
 
-    // Simplified approach: Use document metadata as searchable content
-    // This ensures the system works reliably without complex PDF parsing
-    const extractedText = `Document: ${document.title}
+    // Use extracted text from Vercel API route, or fallback to metadata
+    const textContent = extractedText || `Document: ${document.title}
 Type: ${document.document_type || 'Aviation Manual'}
 Filename: ${document.file_name}
 Description: This is a ${document.document_type || 'aviation'} document that has been uploaded and processed for search and reference.`;
 
-    console.log(`Using metadata-based content for document processing`);
-
-    console.log(`Extracted ${extractedText.length} characters of text`);
+    console.log(`Processing ${extractedText ? 'extracted' : 'metadata-based'} content`);
+    console.log(`Content length: ${textContent.length} characters`);
 
     // Split text into chunks (approximately 1000 characters with overlap)
-    const chunks = splitTextIntoChunks(extractedText, 1000, 200);
+    const chunks = splitTextIntoChunks(textContent, 1000, 200);
     console.log(`Created ${chunks.length} text chunks`);
 
     // Process chunks and create embeddings

@@ -210,7 +210,24 @@ export const DocumentUpload = () => {
     setUploadProgress(0);
 
     try {
-      // Upload file to storage with sanitized filename
+      // Step 1: Extract text using Vercel API route
+      const formDataForApi = new FormData();
+      formDataForApi.append('file', formData.file);
+
+      const extractResponse = await fetch('/api/pdf-extract', {
+        method: 'POST',
+        body: formDataForApi,
+      });
+
+      if (!extractResponse.ok) {
+        const errorData = await extractResponse.json();
+        throw new Error(errorData.details || 'PDF extraction failed');
+      }
+
+      const { content: extractedText, metadata } = await extractResponse.json();
+      setUploadProgress(25);
+
+      // Step 2: Upload file to storage with sanitized filename
       const sanitizedFileName = sanitizeFileName(formData.file.name);
       const fileName = `${user.id}/${Date.now()}-${sanitizedFileName}`;
       const { error: uploadError } = await supabase.storage
@@ -218,10 +235,9 @@ export const DocumentUpload = () => {
         .upload(fileName, formData.file);
 
       if (uploadError) throw uploadError;
-
       setUploadProgress(50);
 
-      // Create document record with sanitized data
+      // Step 3: Create document record with extracted content
       const { data: document, error: docError } = await supabase
         .from('documents')
         .insert({
@@ -231,23 +247,25 @@ export const DocumentUpload = () => {
           file_path: fileName,
           file_size: formData.file.size,
           document_type: formData.documentType,
-          processing_status: 'pending',
+          processing_status: 'processing',
         })
         .select()
         .single();
 
       if (docError) throw docError;
-
       setUploadProgress(75);
 
-      // Start processing
+      // Step 4: Process extracted text into chunks and embeddings
       setProcessing(document.id);
       const { error: processError } = await supabase.functions.invoke('process-pdf', {
-        body: { documentId: document.id },
+        body: { 
+          documentId: document.id,
+          extractedText: extractedText,
+          metadata: metadata
+        },
       });
 
       if (processError) throw processError;
-
       setUploadProgress(100);
 
       toast({
