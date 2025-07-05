@@ -16,8 +16,11 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  let documentId = null;
+  
   try {
-    const { documentId } = await req.json();
+    const requestBody = await req.json();
+    documentId = requestBody.documentId;
     
     if (!documentId) {
       throw new Error('Document ID is required');
@@ -175,18 +178,23 @@ serve(async (req) => {
     console.error('Error processing PDF:', error);
     
     // Update document status to failed if we have documentId
-    const body = await req.text();
-    const data = JSON.parse(body || '{}');
-    if (data.documentId) {
-      const supabase = createClient(supabaseUrl, supabaseServiceKey);
-      await supabase
-        .from('documents')
-        .update({ processing_status: 'failed' })
-        .eq('id', data.documentId);
+    if (documentId) {
+      try {
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        await supabase
+          .from('documents')
+          .update({ processing_status: 'failed' })
+          .eq('id', documentId);
+      } catch (updateError) {
+        console.error('Error updating document status to failed:', updateError);
+      }
     }
 
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ 
+        error: error.message || 'An error occurred processing the PDF',
+        success: false 
+      }),
       { 
         status: 500, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
