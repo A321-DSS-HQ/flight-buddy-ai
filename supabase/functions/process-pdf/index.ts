@@ -19,6 +19,14 @@ serve(async (req) => {
   let documentId = null;
   
   try {
+    // Validate environment variables
+    if (!supabaseUrl || !supabaseServiceKey) {
+      throw new Error('Missing Supabase configuration');
+    }
+    if (!openAIApiKey) {
+      throw new Error('Missing OpenAI API key');
+    }
+
     const requestBody = await req.json();
     documentId = requestBody.documentId;
     
@@ -118,10 +126,17 @@ serve(async (req) => {
       });
 
       if (!embeddingResponse.ok) {
-        throw new Error(`Failed to create embedding for chunk ${i}`);
+        const errorText = await embeddingResponse.text();
+        console.error(`OpenAI API error for chunk ${i}:`, errorText);
+        throw new Error(`Failed to create embedding for chunk ${i}: ${embeddingResponse.status} ${errorText}`);
       }
 
       const embeddingData = await embeddingResponse.json();
+      
+      if (!embeddingData.data || !embeddingData.data[0] || !embeddingData.data[0].embedding) {
+        throw new Error(`Invalid embedding response for chunk ${i}`);
+      }
+      
       const embedding = embeddingData.data[0].embedding;
 
       // Store chunk in database
