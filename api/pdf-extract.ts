@@ -1,9 +1,18 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { createWorker } from 'tesseract.js';
+import formidable from 'formidable';
+import { readFileSync } from 'fs';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.js');
+
+// Disable body parsing for multipart/form-data
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
 interface PDFPageContent {
   pageNumber: number;
@@ -44,29 +53,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     console.log('Enhanced PDF extraction started');
+
+    // Parse form data with formidable
+    const form = formidable({
+      maxFileSize: 50 * 1024 * 1024, // 50MB limit
+      keepExtensions: true,
+    });
+
+    const [fields, files] = await form.parse(req);
     
-    const contentType = req.headers['content-type'] || '';
-    
-    if (!contentType.includes('multipart/form-data')) {
-      return res.status(400).json({ error: 'Content must be multipart/form-data' });
+    if (!files.file || !Array.isArray(files.file) || files.file.length === 0) {
+      return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    // Get raw body buffer
-    const chunks: Buffer[] = [];
+    const uploadedFile = files.file[0];
     
-    if (req.body && Buffer.isBuffer(req.body)) {
-      chunks.push(req.body);
-    } else {
-      return res.status(400).json({ error: 'Invalid file data format' });
+    if (!uploadedFile.filepath) {
+      return res.status(400).json({ error: 'Invalid file upload' });
     }
 
-    const dataBuffer = Buffer.concat(chunks);
+    // Read the uploaded file
+    const dataBuffer = readFileSync(uploadedFile.filepath);
     
     if (dataBuffer.length === 0) {
-      return res.status(400).json({ error: 'No file data received' });
+      return res.status(400).json({ error: 'Empty file uploaded' });
     }
 
-    console.log(`Processing PDF buffer of size: ${dataBuffer.length} bytes`);
+    console.log(`Processing PDF file: ${uploadedFile.originalFilename}, size: ${dataBuffer.length} bytes`);
 
     // Stage 1: Load PDF with PDF.js
     const loadingTask = pdfjsLib.getDocument({
@@ -91,7 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       
       // Extract text from page
       const pageText = textContent.items
-        .map((item: any) => item.str)
+        .map((item: any) => item.str || '')
         .join(' ')
         .trim();
 
@@ -114,51 +127,60 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log(`Page ${pageNum}: ${pageText.length} chars, density: ${textDensity.toFixed(2)}, OCR needed: ${needsOCR}`);
     }
 
-    // Stage 3: OCR processing for pages that need it
+    // Stage 3: OCR processing for pages that need it (simplified for Vercel)
     const ocrPages = pageContents.filter(page => page.needsOCR);
     
-    if (ocrPages.length > 0) {
+    if (ocrPages.length > 0 && ocrPages.length <= 3) { // Limit OCR to 3 pages for performance
       console.log(`Processing ${ocrPages.length} pages with OCR`);
       
-      const worker = await createWorker('eng');
-      
-      for (const pageContent of ocrPages) {
-        try {
-          // Get page as canvas
-          const page = await pdfDoc.getPage(pageContent.pageNumber);
-          const viewport = page.getViewport({ scale: 2.0 }); // Higher scale for better OCR
-          
-          // Create canvas
-          const canvas = require('canvas').createCanvas(viewport.width, viewport.height);
-          const context = canvas.getContext('2d');
-          
-          // Render page to canvas
-          const renderContext = {
-            canvasContext: context,
-            viewport: viewport
-          };
-          
-          await page.render(renderContext).promise;
-          
-          // Convert canvas to image buffer
-          const imageBuffer = canvas.toBuffer('image/png');
-          
-          // Perform OCR
-          const { data: { text } } = await worker.recognize(imageBuffer);
-          
-          if (text.trim().length > pageContent.text.length) {
-            console.log(`OCR improved page ${pageContent.pageNumber}: ${text.trim().length} chars vs ${pageContent.text.length} chars`);
-            pageContent.text = text.trim();
-            pageContent.textDensity = text.trim().length / (viewport.width * viewport.height / 10000);
+      try {
+        const worker = await createWorker('eng');
+        
+        for (const pageContent of ocrPages.slice(0, 3)) { // Process max 3 pages
+          try {
+            // Get page as canvas
+            const page = await pdfDoc.getPage(pageContent.pageNumber);
+            const viewport = page.getViewport({ scale: 1.5 }); // Moderate scale for performance
+            
+            // Create canvas
+            const canvas = require('canvas').createCanvas(viewport.width, viewport.height);
+            const context = canvas.getContext('2d');
+            
+            // Render page to canvas
+            const renderContext = {
+              canvasContext: context,
+              viewport: viewport
+            };
+            
+            await page.render(renderContext).promise;
+            
+            // Convert canvas to image buffer
+            const imageBuffer = canvas.toBuffer('image/png');
+            
+            // Perform OCR with timeout
+            const { data: { text } } = await Promise.race([
+              worker.recognize(imageBuffer),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('OCR timeout')), 15000)
+              )
+            ]) as any;
+            
+            if (text.trim().length > pageContent.text.length) {
+              console.log(`OCR improved page ${pageContent.pageNumber}: ${text.trim().length} chars vs ${pageContent.text.length} chars`);
+              pageContent.text = text.trim();
+              pageContent.textDensity = text.trim().length / (viewport.width * viewport.height / 10000);
+            }
+            
+          } catch (ocrError) {
+            console.error(`OCR failed for page ${pageContent.pageNumber}:`, ocrError);
+            // Keep original text extraction
           }
-          
-        } catch (ocrError) {
-          console.error(`OCR failed for page ${pageContent.pageNumber}:`, ocrError);
-          // Keep original text extraction
         }
+        
+        await worker.terminate();
+      } catch (workerError) {
+        console.error('OCR worker initialization failed:', workerError);
       }
-      
-      await worker.terminate();
     }
 
     // Stage 4: Combine all text and determine processing method
@@ -176,7 +198,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       text: finalText,
       metadata: {
         pages: pdfDoc.numPages,
-        title: info.Title || 'Untitled Document',
+        title: info.Title || uploadedFile.originalFilename || 'Untitled Document',
         author: info.Author || 'Unknown',
         subject: info.Subject || '',
         creator: info.Creator || '',
